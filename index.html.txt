@@ -1,0 +1,867 @@
+import { useState, useEffect, useMemo } from "react";
+import {
+  Plus,
+  Minus,
+  ArrowLeft,
+  Pencil,
+  Trash2,
+  Wallet,
+  Filter,
+  Calculator,
+  Moon,
+  Sun,
+  X,
+  ChevronRight,
+  TrendingUp,
+  TrendingDown,
+  AlertCircle,
+} from "lucide-react";
+
+// ---------- Hilfsfunktionen ----------
+
+const EINNAHME_KATEGORIEN = ["Mitgliedsbeitrag", "Spende", "Verkauf", "Sonstige Einnahme"];
+const AUSGABE_KATEGORIEN = ["Material", "Verpflegung", "Fahrtkosten", "Ausrüstung", "Sonstige Ausgabe"];
+
+function formatEuro(value) {
+  return new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" }).format(value);
+}
+
+function formatDateTime(iso) {
+  return new Date(iso).toLocaleString("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatDate(iso) {
+  return new Date(iso).toLocaleDateString("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+async function storageGet(key, fallback) {
+  try {
+    const res = await window.storage.get(key, false);
+    if (!res) return fallback;
+    return JSON.parse(res.value);
+  } catch (e) {
+    return fallback;
+  }
+}
+
+async function storageSet(key, value) {
+  try {
+    await window.storage.set(key, JSON.stringify(value), false);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// ---------- UI Bausteine ----------
+
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4">
+      <div className="w-full sm:max-w-md bg-white dark:bg-gray-900 rounded-t-2xl sm:rounded-2xl border-t sm:border border-gray-200 dark:border-gray-800 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-800 sticky top-0 bg-white dark:bg-gray-900">
+          <h2 className="text-base font-semibold text-gray-900 dark:text-gray-50">{title}</h2>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div className="mb-4">
+      <label className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-1.5">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+const inputCls =
+  "w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-50 px-3 py-2.5 text-sm outline-none focus:border-gray-500 dark:focus:border-gray-400";
+
+function PrimaryButton({ children, ...props }) {
+  return (
+    <button
+      {...props}
+      className="w-full rounded-lg bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 font-medium text-sm py-2.5 disabled:opacity-40"
+    >
+      {children}
+    </button>
+  );
+}
+
+function SecondaryButton({ children, ...props }) {
+  return (
+    <button
+      {...props}
+      className="w-full rounded-lg border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 font-medium text-sm py-2.5"
+    >
+      {children}
+    </button>
+  );
+}
+
+// ---------- Buchungsformular ----------
+
+function BuchungForm({ initial, onSave, onCancel }) {
+  const [typ, setTyp] = useState(initial?.typ || "einnahme");
+  const [betrag, setBetrag] = useState(initial ? Math.abs(initial.betrag).toString() : "");
+  const [beschreibung, setBeschreibung] = useState(initial?.beschreibung || "");
+  const [kategorie, setKategorie] = useState(initial?.kategorie || "");
+  const [customKategorie, setCustomKategorie] = useState(
+    initial && !EINNAHME_KATEGORIEN.concat(AUSGABE_KATEGORIEN).includes(initial.kategorie) ? initial.kategorie : ""
+  );
+  const [useCustom, setUseCustom] = useState(
+    !!initial && !EINNAHME_KATEGORIEN.concat(AUSGABE_KATEGORIEN).includes(initial.kategorie)
+  );
+  const [error, setError] = useState("");
+
+  const kategorien = typ === "einnahme" ? EINNAHME_KATEGORIEN : AUSGABE_KATEGORIEN;
+
+  function submit() {
+    const num = parseFloat(betrag.replace(",", "."));
+    if (!num || num <= 0) {
+      setError("Bitte einen gültigen Betrag größer 0 eingeben.");
+      return;
+    }
+    const finalKategorie = useCustom ? customKategorie.trim() : kategorie;
+    if (!finalKategorie) {
+      setError("Bitte eine Kategorie wählen oder eingeben.");
+      return;
+    }
+    if (!beschreibung.trim()) {
+      setError("Bitte eine Beschreibung eingeben.");
+      return;
+    }
+    const signed = typ === "einnahme" ? Math.abs(num) : -Math.abs(num);
+    onSave({
+      id: initial?.id || uid(),
+      typ,
+      betrag: signed,
+      beschreibung: beschreibung.trim(),
+      kategorie: finalKategorie,
+      datum: initial?.datum || new Date().toISOString(),
+    });
+  }
+
+  return (
+    <div>
+      <div className="grid grid-cols-2 gap-2 mb-5">
+        <button
+          onClick={() => {
+            setTyp("einnahme");
+            setKategorie("");
+            setUseCustom(false);
+          }}
+          className={`rounded-lg py-2.5 text-sm font-medium border flex items-center justify-center gap-1.5 ${
+            typ === "einnahme"
+              ? "bg-emerald-600 border-emerald-600 text-white"
+              : "border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-300"
+          }`}
+        >
+          <TrendingUp size={16} /> Einnahme
+        </button>
+        <button
+          onClick={() => {
+            setTyp("ausgabe");
+            setKategorie("");
+            setUseCustom(false);
+          }}
+          className={`rounded-lg py-2.5 text-sm font-medium border flex items-center justify-center gap-1.5 ${
+            typ === "ausgabe"
+              ? "bg-rose-600 border-rose-600 text-white"
+              : "border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-300"
+          }`}
+        >
+          <TrendingDown size={16} /> Ausgabe
+        </button>
+      </div>
+
+      <Field label="Betrag (€)">
+        <input
+          type="text"
+          inputMode="decimal"
+          value={betrag}
+          onChange={(e) => setBetrag(e.target.value)}
+          placeholder="0,00"
+          className={inputCls}
+        />
+      </Field>
+
+      <Field label="Beschreibung">
+        <input
+          type="text"
+          value={beschreibung}
+          onChange={(e) => setBeschreibung(e.target.value)}
+          placeholder="z. B. Getränkeverkauf Sommerfest"
+          className={inputCls}
+        />
+      </Field>
+
+      <Field label="Kategorie">
+        {!useCustom ? (
+          <select
+            value={kategorie}
+            onChange={(e) => {
+              if (e.target.value === "__custom") {
+                setUseCustom(true);
+              } else {
+                setKategorie(e.target.value);
+              }
+            }}
+            className={inputCls}
+          >
+            <option value="">Bitte wählen</option>
+            {kategorien.map((k) => (
+              <option key={k} value={k}>
+                {k}
+              </option>
+            ))}
+            <option value="__custom">Andere Kategorie…</option>
+          </select>
+        ) : (
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={customKategorie}
+              onChange={(e) => setCustomKategorie(e.target.value)}
+              placeholder="Eigene Kategorie"
+              className={inputCls}
+            />
+            <button
+              onClick={() => setUseCustom(false)}
+              className="px-3 rounded-lg border border-gray-300 dark:border-gray-700 text-gray-500 text-sm"
+            >
+              Liste
+            </button>
+          </div>
+        )}
+      </Field>
+
+      {error && (
+        <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 text-sm mb-4">
+          <AlertCircle size={15} /> {error}
+        </div>
+      )}
+
+      <div className="flex gap-2 mt-2">
+        <SecondaryButton onClick={onCancel}>Abbrechen</SecondaryButton>
+        <PrimaryButton onClick={submit}>Speichern</PrimaryButton>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Bestätigungs-Modal ----------
+
+function ConfirmModal({ title, message, onConfirm, onCancel }) {
+  return (
+    <Modal title={title} onClose={onCancel}>
+      <p className="text-sm text-gray-600 dark:text-gray-400 mb-5">{message}</p>
+      <div className="flex gap-2">
+        <SecondaryButton onClick={onCancel}>Abbrechen</SecondaryButton>
+        <button
+          onClick={onConfirm}
+          className="w-full rounded-lg bg-rose-600 text-white font-medium text-sm py-2.5"
+        >
+          Löschen
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------- Buchungszeile ----------
+
+function BuchungRow({ buchung, theme, onEdit, onDelete }) {
+  const positiv = buchung.betrag >= 0;
+  return (
+    <div className={`flex items-center justify-between py-3 border-b ${theme.border} last:border-b-0`}>
+      <div className="min-w-0 flex-1 pr-3">
+        <div className="flex items-center gap-2">
+          <p className={`text-sm font-medium truncate ${theme.text}`}>{buchung.beschreibung}</p>
+        </div>
+        <p className={`text-xs mt-0.5 ${theme.subtext}`}>
+          {buchung.kategorie} · {formatDateTime(buchung.datum)}
+        </p>
+      </div>
+      <div className="flex items-center gap-3 shrink-0">
+        <span className={`text-sm font-semibold ${positiv ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+          {positiv ? "+" : ""}
+          {formatEuro(buchung.betrag)}
+        </span>
+        <button onClick={() => onEdit(buchung)} className="p-1.5 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+          <Pencil size={15} />
+        </button>
+        <button onClick={() => onDelete(buchung)} className="p-1.5 text-gray-400 hover:text-rose-600">
+          <Trash2 size={15} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Kassen-Detailansicht ----------
+
+function KasseDetail({ kasse, theme, darkMode, onBack, onRenamed, onDeletedKasse }) {
+  const [data, setData] = useState(null); // { buchungen: [], zaehlungen: [] }
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("uebersicht"); // uebersicht | buchungen | sturz
+  const [showForm, setShowForm] = useState(false);
+  const [editBuchung, setEditBuchung] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [typFilter, setTypFilter] = useState("alle");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [gezaehlt, setGezaehlt] = useState("");
+  const [sturzError, setSturzError] = useState("");
+
+  const dataKey = `kasse-data:${kasse.id}`;
+
+  useEffect(() => {
+    (async () => {
+      const d = await storageGet(dataKey, { buchungen: [], zaehlungen: [] });
+      setData(d);
+      setLoading(false);
+    })();
+  }, [kasse.id]);
+
+  const kassenstand = useMemo(() => {
+    if (!data) return 0;
+    return data.buchungen.reduce((sum, b) => sum + b.betrag, 0);
+  }, [data]);
+
+  async function persist(next) {
+    setData(next);
+    await storageSet(dataKey, next);
+  }
+
+  async function handleSaveBuchung(buchung) {
+    const exists = data.buchungen.some((b) => b.id === buchung.id);
+    const buchungen = exists
+      ? data.buchungen.map((b) => (b.id === buchung.id ? buchung : b))
+      : [buchung, ...data.buchungen];
+    await persist({ ...data, buchungen });
+    setShowForm(false);
+    setEditBuchung(null);
+  }
+
+  async function handleDeleteBuchung() {
+    const buchungen = data.buchungen.filter((b) => b.id !== deleteTarget.id);
+    await persist({ ...data, buchungen });
+    setDeleteTarget(null);
+  }
+
+  async function handleAddZaehlung() {
+    const num = parseFloat(gezaehlt.replace(",", "."));
+    if (isNaN(num) || num < 0) {
+      setSturzError("Bitte einen gültigen Betrag eingeben.");
+      return;
+    }
+    const eintrag = {
+      id: uid(),
+      datum: new Date().toISOString(),
+      gezaehlt: num,
+      digital: kassenstand,
+      differenz: Math.round((num - kassenstand) * 100) / 100,
+    };
+    const zaehlungen = [eintrag, ...data.zaehlungen];
+    await persist({ ...data, zaehlungen });
+    setGezaehlt("");
+    setSturzError("");
+  }
+
+  const gefilterteBuchungen = useMemo(() => {
+    if (!data) return [];
+    return data.buchungen
+      .filter((b) => (typFilter === "alle" ? true : b.typ === typFilter))
+      .filter((b) => (dateFrom ? new Date(b.datum) >= new Date(dateFrom + "T00:00:00") : true))
+      .filter((b) => (dateTo ? new Date(b.datum) <= new Date(dateTo + "T23:59:59") : true))
+      .sort((a, b) => new Date(b.datum) - new Date(a.datum));
+  }, [data, typFilter, dateFrom, dateTo]);
+
+  const letzteZaehlung = data?.zaehlungen?.[0];
+
+  if (loading || !data) {
+    return <div className={`p-6 text-sm ${theme.subtext}`}>Lade Kassendaten…</div>;
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="flex items-center gap-3 px-4 pt-4 pb-3">
+        <button onClick={onBack} className={`p-2 rounded-lg ${theme.hover}`}>
+          <ArrowLeft size={18} className={theme.text} />
+        </button>
+        <h1 className={`text-lg font-semibold truncate ${theme.text}`}>{kasse.name}</h1>
+      </div>
+
+      {/* Tabs */}
+      <div className="px-4 mb-4">
+        <div className={`grid grid-cols-3 gap-1 p-1 rounded-lg ${darkMode ? "bg-gray-900" : "bg-gray-100"}`}>
+          {[
+            ["uebersicht", "Übersicht"],
+            ["buchungen", "Buchungen"],
+            ["sturz", "Kassensturz"],
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`py-2 rounded-md text-xs font-medium ${
+                tab === key
+                  ? "bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-50 shadow-sm"
+                  : "text-gray-500 dark:text-gray-400"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="px-4 pb-24">
+        {tab === "uebersicht" && (
+          <div>
+            <div className={`rounded-2xl border ${theme.border} ${theme.card} p-6 mb-4 text-center`}>
+              <div className="flex items-center justify-center gap-1.5 mb-1">
+                <Wallet size={14} className={theme.subtext} />
+                <span className={`text-xs font-medium uppercase tracking-wide ${theme.subtext}`}>Kassenstand</span>
+              </div>
+              <p className={`text-4xl font-bold tabular-nums ${theme.text}`}>{formatEuro(kassenstand)}</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mb-5">
+              <button
+                onClick={() => {
+                  setEditBuchung({ typ: "einnahme" });
+                  setShowForm(true);
+                }}
+                className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 text-white py-3 text-sm font-medium"
+              >
+                <Plus size={16} /> Einnahme
+              </button>
+              <button
+                onClick={() => {
+                  setEditBuchung({ typ: "ausgabe" });
+                  setShowForm(true);
+                }}
+                className="flex items-center justify-center gap-1.5 rounded-xl bg-rose-600 text-white py-3 text-sm font-medium"
+              >
+                <Minus size={16} /> Ausgabe
+              </button>
+            </div>
+
+            {letzteZaehlung && (
+              <div className={`rounded-xl border ${theme.border} ${theme.card} p-4 mb-5`}>
+                <p className={`text-xs font-medium uppercase tracking-wide ${theme.subtext} mb-2`}>
+                  Letzter Kassensturz · {formatDateTime(letzteZaehlung.datum)}
+                </p>
+                <div className="flex items-center justify-between text-sm">
+                  <span className={theme.subtext}>Differenz</span>
+                  <span
+                    className={`font-semibold ${
+                      letzteZaehlung.differenz === 0
+                        ? theme.text
+                        : letzteZaehlung.differenz > 0
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-rose-600 dark:text-rose-400"
+                    }`}
+                  >
+                    {letzteZaehlung.differenz > 0 ? "+" : ""}
+                    {formatEuro(letzteZaehlung.differenz)}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between mb-2">
+              <h3 className={`text-sm font-semibold ${theme.text}`}>Letzte Buchungen</h3>
+              {data.buchungen.length > 5 && (
+                <button onClick={() => setTab("buchungen")} className="text-xs text-gray-500 flex items-center gap-0.5">
+                  Alle anzeigen <ChevronRight size={13} />
+                </button>
+              )}
+            </div>
+            <div className={`rounded-xl border ${theme.border} ${theme.card} px-4`}>
+              {data.buchungen.length === 0 ? (
+                <p className={`text-sm py-6 text-center ${theme.subtext}`}>Noch keine Buchungen vorhanden.</p>
+              ) : (
+                [...data.buchungen]
+                  .sort((a, b) => new Date(b.datum) - new Date(a.datum))
+                  .slice(0, 5)
+                  .map((b) => (
+                    <BuchungRow
+                      key={b.id}
+                      buchung={b}
+                      theme={theme}
+                      onEdit={(x) => {
+                        setEditBuchung(x);
+                        setShowForm(true);
+                      }}
+                      onDelete={setDeleteTarget}
+                    />
+                  ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {tab === "buchungen" && (
+          <div>
+            <div className="flex items-center gap-2 mb-3 overflow-x-auto">
+              {[
+                ["alle", "Alle"],
+                ["einnahme", "Einnahmen"],
+                ["ausgabe", "Ausgaben"],
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setTypFilter(key)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium border whitespace-nowrap ${
+                    typFilter === key
+                      ? "bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 border-gray-900 dark:border-gray-100"
+                      : `${theme.border} ${theme.subtext}`
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 mb-4">
+              <Filter size={14} className={theme.subtext} />
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className={`${inputCls} text-xs py-1.5`}
+              />
+              <span className={`text-xs ${theme.subtext}`}>bis</span>
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className={`${inputCls} text-xs py-1.5`}
+              />
+            </div>
+
+            <div className={`rounded-xl border ${theme.border} ${theme.card} px-4`}>
+              {gefilterteBuchungen.length === 0 ? (
+                <p className={`text-sm py-6 text-center ${theme.subtext}`}>Keine Buchungen gefunden.</p>
+              ) : (
+                gefilterteBuchungen.map((b) => (
+                  <BuchungRow
+                    key={b.id}
+                    buchung={b}
+                    theme={theme}
+                    onEdit={(x) => {
+                      setEditBuchung(x);
+                      setShowForm(true);
+                    }}
+                    onDelete={setDeleteTarget}
+                  />
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {tab === "sturz" && (
+          <div>
+            <div className={`rounded-2xl border ${theme.border} ${theme.card} p-5 mb-5`}>
+              <div className="flex items-center gap-1.5 mb-3">
+                <Calculator size={15} className={theme.subtext} />
+                <h3 className={`text-sm font-semibold ${theme.text}`}>Neuer Kassensturz</h3>
+              </div>
+              <Field label="Tatsächlich gezählter Bargeldbestand (€)">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={gezaehlt}
+                  onChange={(e) => setGezaehlt(e.target.value)}
+                  placeholder="0,00"
+                  className={inputCls}
+                />
+              </Field>
+              {sturzError && (
+                <p className="text-rose-600 dark:text-rose-400 text-xs mb-3 flex items-center gap-1.5">
+                  <AlertCircle size={13} /> {sturzError}
+                </p>
+              )}
+              <PrimaryButton onClick={handleAddZaehlung}>Vergleich speichern</PrimaryButton>
+            </div>
+
+            <h3 className={`text-sm font-semibold mb-2 ${theme.text}`}>Verlauf</h3>
+            {data.zaehlungen.length === 0 ? (
+              <p className={`text-sm ${theme.subtext}`}>Noch kein Kassensturz durchgeführt.</p>
+            ) : (
+              <div className="space-y-3">
+                {data.zaehlungen.map((z) => (
+                  <div key={z.id} className={`rounded-xl border ${theme.border} ${theme.card} p-4`}>
+                    <p className={`text-xs mb-3 ${theme.subtext}`}>{formatDateTime(z.datum)}</p>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div>
+                        <p className={`text-[11px] ${theme.subtext} mb-0.5`}>Digital</p>
+                        <p className={`text-sm font-semibold ${theme.text}`}>{formatEuro(z.digital)}</p>
+                      </div>
+                      <div>
+                        <p className={`text-[11px] ${theme.subtext} mb-0.5`}>Gezählt</p>
+                        <p className={`text-sm font-semibold ${theme.text}`}>{formatEuro(z.gezaehlt)}</p>
+                      </div>
+                      <div>
+                        <p className={`text-[11px] ${theme.subtext} mb-0.5`}>Differenz</p>
+                        <p
+                          className={`text-sm font-semibold ${
+                            z.differenz === 0
+                              ? theme.text
+                              : z.differenz > 0
+                              ? "text-emerald-600 dark:text-emerald-400"
+                              : "text-rose-600 dark:text-rose-400"
+                          }`}
+                        >
+                          {z.differenz > 0 ? "+" : ""}
+                          {formatEuro(z.differenz)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {showForm && (
+        <Modal
+          title={editBuchung?.id ? "Buchung bearbeiten" : editBuchung?.typ === "ausgabe" ? "Ausgabe erfassen" : "Einnahme erfassen"}
+          onClose={() => {
+            setShowForm(false);
+            setEditBuchung(null);
+          }}
+        >
+          <BuchungForm
+            initial={editBuchung?.id ? editBuchung : { typ: editBuchung?.typ }}
+            onSave={handleSaveBuchung}
+            onCancel={() => {
+              setShowForm(false);
+              setEditBuchung(null);
+            }}
+          />
+        </Modal>
+      )}
+
+      {deleteTarget && (
+        <ConfirmModal
+          title="Buchung löschen"
+          message={`„${deleteTarget.beschreibung}“ über ${formatEuro(deleteTarget.betrag)} wirklich löschen?`}
+          onConfirm={handleDeleteBuchung}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------- Kassenliste (Startseite) ----------
+
+function KassenCard({ kasse, theme, onOpen, onDelete }) {
+  const [stand, setStand] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const d = await storageGet(`kasse-data:${kasse.id}`, { buchungen: [] });
+      setStand(d.buchungen.reduce((s, b) => s + b.betrag, 0));
+    })();
+  }, [kasse.id]);
+
+  return (
+    <div
+      onClick={() => onOpen(kasse)}
+      className={`rounded-2xl border ${theme.border} ${theme.card} p-5 cursor-pointer ${theme.hover}`}
+    >
+      <div className="flex items-start justify-between">
+        <div>
+          <p className={`text-sm font-medium ${theme.subtext}`}>{kasse.name}</p>
+          <p className={`text-2xl font-bold tabular-nums mt-1 ${theme.text}`}>
+            {stand === null ? "…" : formatEuro(stand)}
+          </p>
+        </div>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(kasse);
+          }}
+          className="p-1.5 text-gray-300 hover:text-rose-600 -mt-1 -mr-1"
+        >
+          <Trash2 size={15} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- App ----------
+
+export default function App() {
+  const [kassen, setKassen] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [darkMode, setDarkMode] = useState(false);
+  const [showNewKasse, setShowNewKasse] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [deleteKasseTarget, setDeleteKasseTarget] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const list = await storageGet("kassen", []);
+      setKassen(list);
+      const settings = await storageGet("settings", { darkMode: false });
+      setDarkMode(!!settings.darkMode);
+    })();
+  }, []);
+
+  async function toggleDark() {
+    const next = !darkMode;
+    setDarkMode(next);
+    await storageSet("settings", { darkMode: next });
+  }
+
+  async function createKasse() {
+    if (!newName.trim()) return;
+    const kasse = { id: uid(), name: newName.trim(), createdAt: new Date().toISOString() };
+    const next = [...kassen, kasse];
+    setKassen(next);
+    await storageSet("kassen", next);
+    await storageSet(`kasse-data:${kasse.id}`, { buchungen: [], zaehlungen: [] });
+    setNewName("");
+    setShowNewKasse(false);
+  }
+
+  async function deleteKasse() {
+    const next = kassen.filter((k) => k.id !== deleteKasseTarget.id);
+    setKassen(next);
+    await storageSet("kassen", next);
+    setDeleteKasseTarget(null);
+    if (selected?.id === deleteKasseTarget.id) setSelected(null);
+  }
+
+  const theme = darkMode
+    ? {
+        bg: "bg-gray-950",
+        card: "bg-gray-900",
+        text: "text-gray-50",
+        subtext: "text-gray-400",
+        border: "border-gray-800",
+        hover: "hover:bg-gray-900",
+      }
+    : {
+        bg: "bg-gray-50",
+        card: "bg-white",
+        text: "text-gray-900",
+        subtext: "text-gray-500",
+        border: "border-gray-200",
+        hover: "hover:bg-gray-100",
+      };
+
+  if (kassen === null) {
+    return (
+      <div className={`min-h-screen ${theme.bg} flex items-center justify-center`}>
+        <p className={`text-sm ${theme.subtext}`}>Lade…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`min-h-screen ${theme.bg}`}>
+      <div className="max-w-md mx-auto">
+        {!selected ? (
+          <div>
+            <div className="flex items-center justify-between px-4 pt-5 pb-4">
+              <h1 className={`text-xl font-bold ${theme.text}`}>Kassenbuch</h1>
+              <button onClick={toggleDark} className={`p-2 rounded-lg ${theme.hover}`}>
+                {darkMode ? <Sun size={18} className={theme.text} /> : <Moon size={18} className={theme.text} />}
+              </button>
+            </div>
+
+            <div className="px-4 space-y-3 pb-24">
+              {kassen.length === 0 ? (
+                <div className={`rounded-2xl border ${theme.border} ${theme.card} p-8 text-center`}>
+                  <Wallet size={28} className={`mx-auto mb-3 ${theme.subtext}`} />
+                  <p className={`text-sm mb-1 font-medium ${theme.text}`}>Noch keine Kasse angelegt</p>
+                  <p className={`text-xs ${theme.subtext}`}>Lege deine erste Kasse an, z. B. „Klassenkasse“.</p>
+                </div>
+              ) : (
+                kassen.map((k) => (
+                  <KassenCard
+                    key={k.id}
+                    kasse={k}
+                    theme={theme}
+                    onOpen={setSelected}
+                    onDelete={setDeleteKasseTarget}
+                  />
+                ))
+              )}
+
+              <button
+                onClick={() => setShowNewKasse(true)}
+                className={`w-full flex items-center justify-center gap-1.5 rounded-2xl border border-dashed ${theme.border} py-4 text-sm font-medium ${theme.subtext}`}
+              >
+                <Plus size={16} /> Neue Kasse anlegen
+              </button>
+            </div>
+          </div>
+        ) : (
+          <KasseDetail kasse={selected} theme={theme} darkMode={darkMode} onBack={() => setSelected(null)} />
+        )}
+      </div>
+
+      {showNewKasse && (
+        <Modal title="Neue Kasse anlegen" onClose={() => setShowNewKasse(false)}>
+          <Field label="Name der Kasse">
+            <input
+              type="text"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="z. B. Jugendfeuerwehr"
+              className={inputCls}
+              autoFocus
+            />
+          </Field>
+          <div className="flex gap-2 mt-2">
+            <SecondaryButton onClick={() => setShowNewKasse(false)}>Abbrechen</SecondaryButton>
+            <PrimaryButton onClick={createKasse}>Anlegen</PrimaryButton>
+          </div>
+        </Modal>
+      )}
+
+      {deleteKasseTarget && (
+        <ConfirmModal
+          title="Kasse löschen"
+          message={`„${deleteKasseTarget.name}“ inklusive aller Buchungen wirklich unwiderruflich löschen?`}
+          onConfirm={deleteKasse}
+          onCancel={() => setDeleteKasseTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
